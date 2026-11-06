@@ -37,6 +37,36 @@ class HealthChecks(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(path.read_text()), {"ok": False})
 
+    def test_one_failed_project_does_not_skip_another(self):
+        projects = [
+            {"id": "project-01", "SUPABASE_URL": "https://" + "a" * 20 + ".supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test"},
+            {"id": "project-02", "SUPABASE_URL": "https://" + "b" * 20 + ".supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test"},
+        ]
+        with patch.object(health, "check", side_effect=[{"ok": False}] * 3 + [{"ok": True}] * 3) as probe:
+            results = health.run_projects(projects)
+        self.assertFalse(results[0]["ok"])
+        self.assertTrue(results[1]["ok"])
+        self.assertEqual(probe.call_count, 6)
+
+    def test_bad_project_configuration_does_not_skip_another(self):
+        projects = [{"id": "project-01", "SUPABASE_URL": "invalid"},
+                    {"id": "project-02", "SUPABASE_URL": "https://" + "b" * 20 + ".supabase.co", "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test"}]
+        with patch.object(health, "check", return_value={"ok": True}):
+            results = health.run_projects(projects)
+        self.assertFalse(results[0]["ok"])
+        self.assertTrue(results[1]["ok"])
+
+    def test_reject_empty_or_duplicated_project_list(self):
+        for projects in [[], [{"id": "project-01"}, {"id": "project-01"}]]:
+            with patch.dict(os.environ, {"SUPABASE_PROJECTS_JSON": json.dumps({"projects": projects})}):
+                with self.assertRaises(ValueError):
+                    health.project_configurations()
+
+    def test_legacy_single_project_configuration_remains_supported(self):
+        with patch.dict(os.environ, {"SUPABASE_URL": "https://" + "a" * 20 + ".supabase.co",
+                                     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_test"}, clear=True):
+            self.assertEqual(health.project_configurations()[0]["id"], "project-01")
+
 
 if __name__ == "__main__":
     unittest.main()
