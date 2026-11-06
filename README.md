@@ -41,6 +41,37 @@ GitHub's notification preferences determine whether failed Actions runs send a
 notification. A failed run is visible in Actions; this setup does not configure a
 separate email, Telegram, or SMS service.
 
+## Automatic recovery when GitHub omits a scheduled event
+
+The native daily schedule remains configured. An independent NAS watchdog runs
+at **09:47 and 13:47 UTC** and checks GitHub's public run metadata. If no cloud
+run has succeeded since that day's scheduled time, it requests a run by pushing
+only `dispatch/request.json` to this dedicated repository. The workflow listens
+for that path on `main`; monthly reports and unrelated commits do not trigger it.
+
+The watchdog skips a current successful run, a recent running job, and a request
+that is still being registered. API observation errors are failures, not evidence
+that the schedule was missed. A lock prevents concurrent local requests.
+
+The NAS uses an SSH deploy key restricted to **this repository**, with host keys
+pinned from GitHub's official metadata. Its private key never leaves the NAS.
+There is no GitHub account token or Supabase administrator credential on the NAS.
+The key is writable so it can submit the one request file; it does not grant
+access to other repositories. `scripts/github_watchdog.py` contains the code.
+
+The automatic chain was verified on 2026-11-06: the NAS cron submitted a request
+at 10:19 UTC, GitHub created an event of type `push`, and
+[the cloud run completed successfully](https://github.com/dtabuyodesigner/supabase-health-monitor/actions/runs/42201742399).
+This was not a manual workflow dispatch. The temporary every-minute proof cron
+was removed afterward. A subsequent check detected the successful run and did
+not submit another request.
+
+This recovery mechanism requires the NAS to be on and connected. The cloud
+runner remains separate from the NAS; the recovery trigger depends on it if
+GitHub's own schedule delivery fails. The root cause inside GitHub's schedule
+delivery has not been established. GitHub documents that schedule events may be
+[delayed or dropped under high load](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
 ## NAS schedule
 
 Recommended installation for the dedicated operating-system user:
@@ -78,13 +109,15 @@ payment logic, or private user flows.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s scripts -p test_healthcheck.py -v
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
 Tests cover rejection of privileged/mismatched keys, refusal to forward keys
 through redirects, HTTP failure handling, private atomic status-file writes,
 empty/duplicate project validation, legacy compatibility, and isolation of
 failures between projects.
+Watchdog tests also cover missing, failed, previous-day, already successful,
+recently running, not-yet-due and recently requested cloud runs.
 
 The configuration is an explicit allowlist. A future Supabase project is not
 covered automatically: provision its health RPC and add its public key to both
@@ -99,8 +132,11 @@ guarantee that a particular health check will prevent pausing. These jobs are
 best-effort availability monitoring and read activity. They do not automatically
 resume a paused project or change its billing plan.
 
-To stop: disable the GitHub workflow, remove only the marked NAS cron block, and
-optionally remove the dedicated NAS files. Keep all unrelated cron entries.
+To stop: disable the GitHub workflow, remove only the marked NAS cron blocks
+`supabase-health-monitor` and `supabase-github-watchdog`, and optionally remove
+the dedicated NAS files. Keep all unrelated cron entries. Revoke the deploy key
+named `NAS availability dispatch only` in this repository's deploy-key settings
+and remove its private file from the NAS when retiring the watchdog.
 Remove the GitHub Actions configuration secret if retiring the monitor. Once both jobs
 are disabled, the database endpoint can be removed with:
 
