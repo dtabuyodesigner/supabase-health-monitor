@@ -1,9 +1,10 @@
 # Read-only database availability monitor
 
-This repository runs a minimal health check against a Supabase Postgres RPC.
+This repository runs minimal health checks against configured Supabase Postgres RPCs.
 The same Python script can run independently in GitHub Actions and on a NAS.
-It makes three GET requests per run, accepts only HTTP 200 with the JSON value
-`true`, and exits with a nonzero status on any failed check.
+It makes three GET requests per project per run, accepts only HTTP 200 with the JSON value
+`true`, and exits with a nonzero status on any failed check. A failed project
+does not stop the remaining projects from being checked.
 
 It never queries application tables, downloads personal data, authenticates as a
 person, or uses a database password or service-role key. Configuration values are
@@ -11,20 +12,27 @@ not included in this public repository or its logs.
 
 ## Cloud schedule
 
-- GitHub-hosted standard Ubuntu runner: daily at **07:17 UTC**.
+- GitHub-hosted standard Ubuntu runner: daily at **09:17 UTC**.
 - Manual runs: Actions → Read-only database availability → Run workflow.
-- Repository Actions secrets: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`.
+- Repository Actions secret: `SUPABASE_PROJECTS_JSON`.
+- The JSON object contains a non-empty `projects` list, with unique neutral
+  identifiers `project-01`, `project-02`, and so on. Each entry provides `id`,
+  `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`.
+- Actual project names, URLs and keys remain in private configuration. No
+  application-specific project name is used in public logs or reports.
 - The key must be a matching legacy `anon` key or a publishable key.
 - No artifacts, cache, paid runner, or paid Supabase upgrade is configured.
 
 Standard GitHub-hosted runners in a public repository are free under the
 [current GitHub billing rules](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
-GitHub can delay scheduled runs; the script's timeout and the job's three-minute
+GitHub can delay scheduled runs; the script's timeout and the job's five-minute
 limit bound each run.
 
 GitHub may disable schedules in public repositories after 60 days without
 repository activity. The workflow records one genuine monthly health result
-under `reports/`, using its repository-scoped ephemeral token. This keeps an
+under `reports/`, using its repository-scoped ephemeral token. A coverage change
+also updates the report. Public reports contain only time, overall result and
+project count. This keeps an
 operational history and supplies repository activity. No target URL, key, private
 table data, or user identity is written to those reports. If there are no
 successful runs for two months, review and re-enable the workflow from Actions.
@@ -39,7 +47,7 @@ Recommended installation for the dedicated operating-system user:
 
 - Script: `$HOME/.local/share/supabase-health-monitor/healthcheck.py`.
 - Configuration: `$HOME/.config/supabase-health-monitor/config.json`, mode `0600`.
-- Configuration contains the two variables named above as JSON properties.
+- Configuration contains the same `projects` JSON object as the cloud secret.
 - Latest result: `$HOME/.local/share/supabase-health-monitor/status.json`.
 - Cron log: `$HOME/.local/share/supabase-health-monitor/run.log`.
 - Schedule: daily at **19:43 UTC**, on a NAS with its system timezone set to UTC.
@@ -74,7 +82,14 @@ python3 -m unittest discover -s scripts -p test_healthcheck.py -v
 ```
 
 Tests cover rejection of privileged/mismatched keys, refusal to forward keys
-through redirects, HTTP failure handling, and private atomic status-file writes.
+through redirects, HTTP failure handling, private atomic status-file writes,
+empty/duplicate project validation, legacy compatibility, and isolation of
+failures between projects.
+
+The configuration is an explicit allowlist. A future Supabase project is not
+covered automatically: provision its health RPC and add its public key to both
+private configurations. No Supabase management token is distributed to either
+scheduled job. Paused projects must be restored before the RPC can be provisioned.
 
 ## Limits and removal
 
@@ -86,7 +101,7 @@ resume a paused project or change its billing plan.
 
 To stop: disable the GitHub workflow, remove only the marked NAS cron block, and
 optionally remove the dedicated NAS files. Keep all unrelated cron entries.
-Remove the two GitHub Actions secrets if retiring the monitor. Once both jobs
+Remove the GitHub Actions configuration secret if retiring the monitor. Once both jobs
 are disabled, the database endpoint can be removed with:
 
 ```sql
