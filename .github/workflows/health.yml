@@ -2,7 +2,7 @@ name: Read-only database availability
 
 on:
   schedule:
-    - cron: '17 7 * * *'
+    - cron: '17 9 * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,13 +15,12 @@ concurrency:
 jobs:
   health:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Check the read-only RPC three times
+      - name: Check each configured read-only RPC three times
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_PROJECTS_JSON: ${{ secrets.SUPABASE_PROJECTS_JSON }}
         run: python3 scripts/healthcheck.py --status-file /tmp/monitor-status.json
       - name: Record a monthly report and keep the schedule active
         shell: bash
@@ -29,9 +28,11 @@ jobs:
           set -euo pipefail
           month="$(date -u +%Y-%m)"
           previous="$(cat reports/latest-month.txt 2>/dev/null || true)"
-          if [ "$month" != "$previous" ]; then
+          count="$(python3 -c 'import json; print(len(json.load(open("/tmp/monitor-status.json"))["projects"]))')"
+          previous_count="$(python3 -c 'import json,pathlib; p=pathlib.Path("reports/latest-check.json"); print(json.loads(p.read_text()).get("project_count",0) if p.exists() else 0)')"
+          if [ "$month" != "$previous" ] || [ "$count" != "$previous_count" ]; then
             mkdir -p reports
-            cp /tmp/monitor-status.json reports/latest-check.json
+            python3 -c 'import json; d=json.load(open("/tmp/monitor-status.json")); json.dump({"checked_at":d["checked_at"],"ok":d["ok"],"project_count":len(d["projects"])},open("reports/latest-check.json","w"),sort_keys=True)'
             printf '%s\n' "$month" > reports/latest-month.txt
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
